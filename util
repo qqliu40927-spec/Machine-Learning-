@@ -1,0 +1,616 @@
+"""This package includes a miscellaneous collection of useful helper functions."""
+
+from __future__ import print_function
+import os
+import tarfile
+import requests
+from warnings import warn
+from zipfile import ZipFile
+from bs4 import BeautifulSoup
+from os.path import abspath, isdir, join, basename
+
+
+class GetData(object):
+    """A Python script for downloading CycleGAN or pix2pix datasets.
+
+    Parameters:
+        technique (str) -- One of: 'cyclegan' or 'pix2pix'.
+        verbose (bool)  -- If True, print additional information.
+
+    Examples:
+        >>> from util.get_data import GetData
+        >>> gd = GetData(technique='cyclegan')
+        >>> new_data_path = gd.get(save_path='./datasets')  # options will be displayed.
+
+    Alternatively, You can use bash scripts: 'scripts/download_pix2pix_model.sh'
+    and 'scripts/download_cyclegan_model.sh'.
+    """
+
+    def __init__(self, technique='cyclegan', verbose=True):
+        url_dict = {
+            'pix2pix': 'http://efrosgans.eecs.berkeley.edu/pix2pix/datasets/',
+            'cyclegan': 'https://people.eecs.berkeley.edu/~taesung_park/CycleGAN/datasets'
+        }
+        self.url = url_dict.get(technique.lower())
+        self._verbose = verbose
+
+    def _print(self, text):
+        if self._verbose:
+            print(text)
+
+    @staticmethod
+    def _get_options(r):
+        soup = BeautifulSoup(r.text, 'lxml')
+        options = [h.text for h in soup.find_all('a', href=True)
+                   if h.text.endswith(('.zip', 'tar.gz'))]
+        return options
+
+    def _present_options(self):
+        r = requests.get(self.url)
+        options = self._get_options(r)
+        print('Options:\n')
+        for i, o in enumerate(options):
+            print("{0}: {1}".format(i, o))
+        choice = input("\nPlease enter the number of the "
+                       "dataset above you wish to download:")
+        return options[int(choice)]
+
+    def _download_data(self, dataset_url, save_path):
+        if not isdir(save_path):
+            os.makedirs(save_path)
+
+        base = basename(dataset_url)
+        temp_save_path = join(save_path, base)
+
+        with open(temp_save_path, "wb") as f:
+            r = requests.get(dataset_url)
+            f.write(r.content)
+
+        if base.endswith('.tar.gz'):
+            obj = tarfile.open(temp_save_path)
+        elif base.endswith('.zip'):
+            obj = ZipFile(temp_save_path, 'r')
+        else:
+            raise ValueError("Unknown File Type: {0}.".format(base))
+
+        self._print("Unpacking Data...")
+        obj.extractall(save_path)
+        obj.close()
+        os.remove(temp_save_path)
+
+    def get(self, save_path, dataset=None):
+        """
+
+        Download a dataset.
+
+        Parameters:
+            save_path (str) -- A directory to save the data to.
+            dataset (str)   -- (optional). A specific dataset to download.
+                            Note: this must include the file extension.
+                            If None, options will be presented for you
+                            to choose from.
+
+        Returns:
+            save_path_full (str) -- the absolute path to the downloaded data.
+
+        """
+        if dataset is None:
+            selected_dataset = self._present_options()
+        else:
+            selected_dataset = dataset
+
+        save_path_full = join(save_path, selected_dataset.split('.')[0])
+
+        if isdir(save_path_full):
+            warn("\n'{0}' already exists. Voiding Download.".format(
+                save_path_full))
+        else:
+            self._print('Downloading Data...')
+            url = "{0}/{1}".format(self.url, selected_dataset)
+            self._download_data(url, save_path=save_path)
+
+        return abspath(save_path_full)
+
+import dominate
+from dominate.tags import meta, h3, table, tr, td, p, a, img, br
+import os
+
+
+class HTML:
+    """This HTML class allows us to save images and write texts into a single HTML file.
+
+     It consists of functions such as <add_header> (add a text header to the HTML file),
+     <add_images> (add a row of images to the HTML file), and <save> (save the HTML to the disk).
+     It is based on Python library 'dominate', a Python library for creating and manipulating HTML documents using a DOM API.
+    """
+
+    def __init__(self, web_dir, title, refresh=0):
+        """Initialize the HTML classes
+
+        Parameters:
+            web_dir (str) -- a directory that stores the webpage. HTML file will be created at <web_dir>/index.html; images will be saved at <web_dir/images/
+            title (str)   -- the webpage name
+            refresh (int) -- how often the website refresh itself; if 0; no refreshing
+        """
+        self.title = title
+        self.web_dir = web_dir
+        self.img_dir = os.path.join(self.web_dir, 'images')
+        if not os.path.exists(self.web_dir):
+            os.makedirs(self.web_dir)
+        if not os.path.exists(self.img_dir):
+            os.makedirs(self.img_dir)
+
+        self.doc = dominate.document(title=title)
+        if refresh > 0:
+            with self.doc.head:
+                meta(http_equiv="refresh", content=str(refresh))
+
+    def get_image_dir(self):
+        """Return the directory that stores images"""
+        return self.img_dir
+
+    def add_header(self, text):
+        """Insert a header to the HTML file
+
+        Parameters:
+            text (str) -- the header text
+        """
+        with self.doc:
+            h3(text)
+
+    def add_images(self, ims, txts, links, width=400):
+        """add images to the HTML file
+
+        Parameters:
+            ims (str list)   -- a list of image paths
+            txts (str list)  -- a list of image names shown on the website
+            links (str list) --  a list of hyperref links; when you click an image, it will redirect you to a new page
+        """
+        self.t = table(border=1, style="table-layout: fixed;")  # Insert a table
+        self.doc.add(self.t)
+        with self.t:
+            with tr():
+                for im, txt, link in zip(ims, txts, links):
+                    with td(style="word-wrap: break-word;", halign="center", valign="top"):
+                        with p():
+                            with a(href=os.path.join('images', link)):
+                                img(style="width:%dpx" % width, src=os.path.join('images', im))
+                            br()
+                            p(txt)
+
+    def save(self):
+        """save the current content to the HMTL file"""
+        html_file = '%s/index.html' % self.web_dir
+        f = open(html_file, 'wt')
+        f.write(self.doc.render())
+        f.close()
+
+
+if __name__ == '__main__':  # we show an example usage here.
+    html = HTML('web/', 'test_html')
+    html.add_header('hello world')
+
+    ims, txts, links = [], [], []
+    for n in range(4):
+        ims.append('image_%d.png' % n)
+        txts.append('text_%d' % n)
+        links.append('image_%d.png' % n)
+    html.add_images(ims, txts, links)
+    html.save()
+
+import random
+import torch
+
+
+class ImagePool():
+    """This class implements an image buffer that stores previously generated images.
+
+    This buffer enables us to update discriminators using a history of generated images
+    rather than the ones produced by the latest generators.
+    """
+
+    def __init__(self, pool_size):
+        """Initialize the ImagePool class
+
+        Parameters:
+            pool_size (int) -- the size of image buffer, if pool_size=0, no buffer will be created
+        """
+        self.pool_size = pool_size
+        if self.pool_size > 0:  # create an empty pool
+            self.num_imgs = 0
+            self.images = []
+
+    def query(self, images):
+        """Return an image from the pool.
+
+        Parameters:
+            images: the latest generated images from the generator
+
+        Returns images from the buffer.
+
+        By 50/100, the buffer will return input images.
+        By 50/100, the buffer will return images previously stored in the buffer,
+        and insert the current images to the buffer.
+        """
+        if self.pool_size == 0:  # if the buffer size is 0, do nothing
+            return images
+        return_images = []
+        for image in images:
+            image = torch.unsqueeze(image.data, 0)
+            if self.num_imgs < self.pool_size:   # if the buffer is not full; keep inserting current images to the buffer
+                self.num_imgs = self.num_imgs + 1
+                self.images.append(image)
+                return_images.append(image)
+            else:
+                p = random.uniform(0, 1)
+                if p > 0.5:  # by 50% chance, the buffer will return a previously stored image, and insert the current image into the buffer
+                    random_id = random.randint(0, self.pool_size - 1)  # randint is inclusive
+                    tmp = self.images[random_id].clone()
+                    self.images[random_id] = image
+                    return_images.append(tmp)
+                else:       # by another 50% chance, the buffer will return the current image
+                    return_images.append(image)
+        return_images = torch.cat(return_images, 0)   # collect all the images and return
+        return return_images
+
+"""This module contains simple helper functions """
+from __future__ import print_function
+import torch
+import numpy as np
+from PIL import Image
+import os
+
+
+def tensor2im(input_image, imtype=np.uint8):
+    """"Converts a Tensor array into a numpy image array.
+
+    Parameters:
+        input_image (tensor) --  the input image tensor array
+        imtype (type)        --  the desired type of the converted numpy array
+    """
+    if not isinstance(input_image, np.ndarray):
+        if isinstance(input_image, torch.Tensor):  # get the data from a variable
+            image_tensor = input_image.data
+        else:
+            return input_image
+        image_numpy = image_tensor[0].cpu().float().numpy()  # convert it into a numpy array
+        if image_numpy.shape[0] == 1:  # grayscale to RGB
+            image_numpy = np.tile(image_numpy, (3, 1, 1))
+        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0  # post-processing: tranpose and scaling
+    else:  # if it is a numpy array, do nothing
+        image_numpy = input_image
+    return image_numpy.astype(imtype)
+
+
+def diagnose_network(net, name='network'):
+    """Calculate and print the mean of average absolute(gradients)
+
+    Parameters:
+        net (torch network) -- Torch network
+        name (str) -- the name of the network
+    """
+    mean = 0.0
+    count = 0
+    for param in net.parameters():
+        if param.grad is not None:
+            mean += torch.mean(torch.abs(param.grad.data))
+            count += 1
+    if count > 0:
+        mean = mean / count
+    print(name)
+    print(mean)
+
+
+def save_image(image_numpy, image_path, aspect_ratio=1.0):
+    """Save a numpy image to the disk
+
+    Parameters:
+        image_numpy (numpy array) -- input numpy array
+        image_path (str)          -- the path of the image
+    """
+
+    image_pil = Image.fromarray(image_numpy)
+    h, w, _ = image_numpy.shape
+
+    if aspect_ratio > 1.0:
+        image_pil = image_pil.resize((h, int(w * aspect_ratio)), Image.BICUBIC)
+    if aspect_ratio < 1.0:
+        image_pil = image_pil.resize((int(h / aspect_ratio), w), Image.BICUBIC)
+    image_pil.save(image_path)
+
+
+def print_numpy(x, val=True, shp=False):
+    """Print the mean, min, max, median, std, and size of a numpy array
+
+    Parameters:
+        val (bool) -- if print the values of the numpy array
+        shp (bool) -- if print the shape of the numpy array
+    """
+    x = x.astype(np.float64)
+    if shp:
+        print('shape,', x.shape)
+    if val:
+        x = x.flatten()
+        print('mean = %3.3f, min = %3.3f, max = %3.3f, median = %3.3f, std=%3.3f' % (
+            np.mean(x), np.min(x), np.max(x), np.median(x), np.std(x)))
+
+
+def mkdirs(paths):
+    """create empty directories if they don't exist
+
+    Parameters:
+        paths (str list) -- a list of directory paths
+    """
+    if isinstance(paths, list) and not isinstance(paths, str):
+        for path in paths:
+            mkdir(path)
+    else:
+        mkdir(paths)
+
+
+def mkdir(path):
+    """create a single empty directory if it didn't exist
+
+    Parameters:
+        path (str) -- a single directory path
+    """
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+import numpy as np
+import os
+import sys
+import ntpath
+import time
+from . import util, html
+from subprocess import Popen, PIPE
+
+
+try:
+    import wandb
+except ImportError:
+    print('Warning: wandb package cannot be found. The option "--use_wandb" will result in error.')
+
+if sys.version_info[0] == 2:
+    VisdomExceptionBase = Exception
+else:
+    VisdomExceptionBase = ConnectionError
+
+
+def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256, use_wandb=False):
+    """Save images to the disk.
+
+    Parameters:
+        webpage (the HTML class) -- the HTML webpage class that stores these imaegs (see html.py for more details)
+        visuals (OrderedDict)    -- an ordered dictionary that stores (name, images (either tensor or numpy) ) pairs
+        image_path (str)         -- the string is used to create image paths
+        aspect_ratio (float)     -- the aspect ratio of saved images
+        width (int)              -- the images will be resized to width x width
+
+    This function will save images stored in 'visuals' to the HTML file specified by 'webpage'.
+    """
+    image_dir = webpage.get_image_dir()
+    short_path = ntpath.basename(image_path[0])
+    name = os.path.splitext(short_path)[0]
+
+    webpage.add_header(name)
+    ims, txts, links = [], [], []
+    ims_dict = {}
+    for label, im_data in visuals.items():
+        im = util.tensor2im(im_data)
+        image_name = '%s_%s.png' % (name, label)
+        save_path = os.path.join(image_dir, image_name)
+        util.save_image(im, save_path, aspect_ratio=aspect_ratio)
+        ims.append(image_name)
+        txts.append(label)
+        links.append(image_name)
+        if use_wandb:
+            ims_dict[label] = wandb.Image(im)
+    webpage.add_images(ims, txts, links, width=width)
+    if use_wandb:
+        wandb.log(ims_dict)
+
+
+class Visualizer():
+    """This class includes several functions that can display/save images and print/save logging information.
+
+    It uses a Python library 'visdom' for display, and a Python library 'dominate' (wrapped in 'HTML') for creating HTML files with images.
+    """
+
+    def __init__(self, opt):
+        """Initialize the Visualizer class
+
+        Parameters:
+            opt -- stores all the experiment flags; needs to be a subclass of BaseOptions
+        Step 1: Cache the training/test options
+        Step 2: connect to a visdom server
+        Step 3: create an HTML object for saveing HTML filters
+        Step 4: create a logging file to store training losses
+        """
+        self.opt = opt  # cache the option
+        self.display_id = opt.display_id
+        self.use_html = opt.isTrain and not opt.no_html
+        self.win_size = opt.display_winsize
+        self.name = opt.name
+        self.port = opt.display_port
+        self.saved = False
+        self.use_wandb = opt.use_wandb
+        self.current_epoch = 0
+        self.ncols = opt.display_ncols
+        
+        if self.display_id > 0:  # connect to a visdom server given <display_port> and <display_server>
+            import visdom
+            self.vis = visdom.Visdom(server=opt.display_server, port=opt.display_port, env=opt.display_env)
+            if not self.vis.check_connection():
+                self.create_visdom_connections()
+
+        if self.use_wandb:
+            self.wandb_run = wandb.init(project='CycleGAN-and-pix2pix', name=opt.name, config=opt) if not wandb.run else wandb.run
+            self.wandb_run._label(repo='CycleGAN-and-pix2pix')
+
+        if self.use_html:  # create an HTML object at <checkpoints_dir>/web/; images will be saved under <checkpoints_dir>/web/images/
+            self.web_dir = os.path.join(opt.checkpoints_dir, opt.name, 'web')
+            self.img_dir = os.path.join(self.web_dir, 'images')
+            print('create web directory %s...' % self.web_dir)
+            util.mkdirs([self.web_dir, self.img_dir])
+        # create a logging file to store training losses
+        self.log_name = os.path.join(opt.checkpoints_dir, opt.name, 'loss_log.txt')
+        with open(self.log_name, "a") as log_file:
+            now = time.strftime("%c")
+            log_file.write('================ Training Loss (%s) ================\n' % now)
+
+    def reset(self):
+        """Reset the self.saved status"""
+        self.saved = False
+
+    def create_visdom_connections(self):
+        """If the program could not connect to Visdom server, this function will start a new server at port < self.port > """
+        cmd = sys.executable + ' -m visdom.server -p %d &>/dev/null &' % self.port
+        print('\n\nCould not connect to Visdom server. \n Trying to start a server....')
+        print('Command: %s' % cmd)
+        Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
+
+    def display_current_results(self, visuals, epoch, save_result):
+        """Display current results on visdom; save current results to an HTML file.
+
+        Parameters:
+            visuals (OrderedDict) - - dictionary of images to display or save
+            epoch (int) - - the current epoch
+            save_result (bool) - - if save the current results to an HTML file
+        """
+        if self.display_id > 0:  # show images in the browser using visdom
+            ncols = self.ncols
+            if ncols > 0:        # show all the images in one visdom panel
+                ncols = min(ncols, len(visuals))
+                h, w = next(iter(visuals.values())).shape[:2]
+                table_css = """<style>
+                        table {border-collapse: separate; border-spacing: 4px; white-space: nowrap; text-align: center}
+                        table td {width: % dpx; height: % dpx; padding: 4px; outline: 4px solid black}
+                        </style>""" % (w, h)  # create a table css
+                # create a table of images.
+                title = self.name
+                label_html = ''
+                label_html_row = ''
+                images = []
+                idx = 0
+                for label, image in visuals.items():
+                    image_numpy = util.tensor2im(image)
+                    label_html_row += '<td>%s</td>' % label
+                    images.append(image_numpy.transpose([2, 0, 1]))
+                    idx += 1
+                    if idx % ncols == 0:
+                        label_html += '<tr>%s</tr>' % label_html_row
+                        label_html_row = ''
+                white_image = np.ones_like(image_numpy.transpose([2, 0, 1])) * 255
+                while idx % ncols != 0:
+                    images.append(white_image)
+                    label_html_row += '<td></td>'
+                    idx += 1
+                if label_html_row != '':
+                    label_html += '<tr>%s</tr>' % label_html_row
+                try:
+                    self.vis.images(images, nrow=ncols, win=self.display_id + 1,
+                                    padding=2, opts=dict(title=title + ' images'))
+                    label_html = '<table>%s</table>' % label_html
+                    self.vis.text(table_css + label_html, win=self.display_id + 2,
+                                  opts=dict(title=title + ' labels'))
+                except VisdomExceptionBase:
+                    self.create_visdom_connections()
+
+            else:     # show each image in a separate visdom panel;
+                idx = 1
+                try:
+                    for label, image in visuals.items():
+                        image_numpy = util.tensor2im(image)
+                        self.vis.image(image_numpy.transpose([2, 0, 1]), opts=dict(title=label),
+                                       win=self.display_id + idx)
+                        idx += 1
+                except VisdomExceptionBase:
+                    self.create_visdom_connections()
+
+        if self.use_wandb:
+            columns = [key for key, _ in visuals.items()]
+            columns.insert(0,'epoch')
+            result_table = wandb.Table(columns=columns)
+            table_row = [epoch]
+            ims_dict = {}
+            for label, image in visuals.items():
+                image_numpy = util.tensor2im(image)
+                wandb_image = wandb.Image(image_numpy)
+                table_row.append(wandb_image)
+                ims_dict[label] = wandb_image
+            self.wandb_run.log(ims_dict)
+            if epoch != self.current_epoch:
+                self.current_epoch = epoch
+                result_table.add_data(*table_row)
+                self.wandb_run.log({"Result": result_table})
+
+
+        if self.use_html and (save_result or not self.saved):  # save images to an HTML file if they haven't been saved.
+            self.saved = True
+            # save images to the disk
+            for label, image in visuals.items():
+                image_numpy = util.tensor2im(image)
+                img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
+                util.save_image(image_numpy, img_path)
+
+            # update website
+            webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, refresh=1)
+            for n in range(epoch, 0, -1):
+                webpage.add_header('epoch [%d]' % n)
+                ims, txts, links = [], [], []
+
+                for label, image_numpy in visuals.items():
+                    image_numpy = util.tensor2im(image)
+                    img_path = 'epoch%.3d_%s.png' % (n, label)
+                    ims.append(img_path)
+                    txts.append(label)
+                    links.append(img_path)
+                webpage.add_images(ims, txts, links, width=self.win_size)
+            webpage.save()
+
+    def plot_current_losses(self, epoch, counter_ratio, losses):
+        """display the current losses on visdom display: dictionary of error labels and values
+
+        Parameters:
+            epoch (int)           -- current epoch
+            counter_ratio (float) -- progress (percentage) in the current epoch, between 0 to 1
+            losses (OrderedDict)  -- training losses stored in the format of (name, float) pairs
+        """
+        if not hasattr(self, 'plot_data'):
+            self.plot_data = {'X': [], 'Y': [], 'legend': list(losses.keys())}
+        self.plot_data['X'].append(epoch + counter_ratio)
+        self.plot_data['Y'].append([losses[k] for k in self.plot_data['legend']])
+        try:
+            self.vis.line(
+                X=np.stack([np.array(self.plot_data['X'])] * len(self.plot_data['legend']), 1),
+                Y=np.array(self.plot_data['Y']),
+                opts={
+                    'title': self.name + ' loss over time',
+                    'legend': self.plot_data['legend'],
+                    'xlabel': 'epoch',
+                    'ylabel': 'loss'},
+                win=self.display_id)
+        except VisdomExceptionBase:
+            self.create_visdom_connections()
+        if self.use_wandb:
+            self.wandb_run.log(losses)
+
+    # losses: same format as |losses| of plot_current_losses
+    def print_current_losses(self, epoch, iters, losses, t_comp, t_data):
+        """print current losses on console; also save the losses to the disk
+
+        Parameters:
+            epoch (int) -- current epoch
+            iters (int) -- current training iteration during this epoch (reset to 0 at the end of every epoch)
+            losses (OrderedDict) -- training losses stored in the format of (name, float) pairs
+            t_comp (float) -- computational time per data point (normalized by batch_size)
+            t_data (float) -- data loading time per data point (normalized by batch_size)
+        """
+        message = '(epoch: %d, iters: %d, time: %.3f, data: %.3f) ' % (epoch, iters, t_comp, t_data)
+        for k, v in losses.items():
+            message += '%s: %.3f ' % (k, v)
+
+        print(message)  # print the message
+        with open(self.log_name, "a") as log_file:
+            log_file.write('%s\n' % message)  # save the message
